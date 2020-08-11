@@ -1,5 +1,6 @@
 package c.gingdev.objecttracking
 
+
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -81,4 +82,3 @@ class DrawingView(context: Context, var visionObjects: List<FirebaseVisionObject
         }
     }
 }
-

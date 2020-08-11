@@ -1,137 +1,156 @@
 package c.gingdev.objecttracking
 
 import android.Manifest
-import android.app.Activity
-import android.content.ContentValues
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.drawable.Drawable
-import android.net.Uri
-import androidx.appcompat.app.AppCompatActivity
+import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraDevice
 import android.os.Bundle
-import android.provider.MediaStore
+import android.util.Log
+import android.util.Size
+import android.view.Surface
+import android.view.TextureView
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
-import com.bumptech.glide.Glide
-import com.bumptech.glide.request.target.CustomTarget
-import com.bumptech.glide.request.transition.Transition
+import androidx.core.content.ContextCompat
 import com.google.firebase.ml.vision.FirebaseVision
 import com.google.firebase.ml.vision.common.FirebaseVisionImage
 import com.google.firebase.ml.vision.objects.FirebaseVisionObjectDetectorOptions
 import kotlinx.android.synthetic.main.activity_main.*
+import kotlin.concurrent.thread
 
 class MainActivity: AppCompatActivity(),
-	ActivityCompat.OnRequestPermissionsResultCallback {
+    TextureView.SurfaceTextureListener,
+    Camera2Api.Camera2Interface{
 
-//	Camera Request Code
-	companion object {
-		const val ODT_PERMISSIONS_REQUEST: Int = 1
-		const val ODT_REQUEST_IMAGE_CAPTURE = 1
-	}
+    private val mCamera by lazy {
+        Camera2Api(this)
+    }
 
-	private lateinit var imageBitmap: Bitmap
+    companion object {
+        private const val REQUEST_CODE_PERMISSIONS = 10
+        private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
+    }
 
-	override fun onCreate(savedInstanceState: Bundle?) {
-		super.onCreate(savedInstanceState)
-		setContentView(R.layout.activity_main)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
 
-		fab.setOnClickListener {
-//			Toast.makeText(applicationContext, "click", Toast.LENGTH_LONG).show()
-//
-//			val takePhotoIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-//			if (takePhotoIntent.resolveActivity(packageManager) != null) {
-//				val values = ContentValues()
-//				values.put(MediaStore.Images.Media.TITLE, "MLKit_codelab")
-//				outputFileUri = contentResolver
-//					.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)!!
-//
-//				takePhotoIntent.putExtra(MediaStore.EXTRA_OUTPUT, outputFileUri)
-//				startActivityForResult(takePhotoIntent, ODT_REQUEST_IMAGE_CAPTURE)
-//			}
+        textureView.surfaceTextureListener = this
+    }
 
-			Glide.with(this)
-				.asBitmap()
-				.load("https://hips.hearstapps.com/hmg-prod.s3.amazonaws.com/images/white-female-shoes-on-feet-royalty-free-image-912581410-1563805834.jpg")
-				.into(object: CustomTarget<Bitmap>() {
-					override fun onLoadCleared(placeholder: Drawable?) {}
+    override fun onResume() {
+        super.onResume()
 
-					override fun onResourceReady(resource: Bitmap, transition: Transition<in Bitmap>?) {
-						imageView.setImageBitmap(resource)
-						imageBitmap = resource
+        if (allPermissionsGranted()) {
+            if (textureView.isAvailable) {
+                openCamera()
+            } else {
+                textureView.surfaceTextureListener = this
+            }
+        } else {
+            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
+        }
+    }
 
-//						val image = getCapturedImage()
-//
-//						// display capture image
-//						imageView.setImageBitmap(image)
+    override fun onPause() {
+        super.onPause()
+        closeCamera()
+    }
 
-						// run through ODT and display result
-						runObjectDetection(resource)
-					}
-				})
-		}
+    private fun openCamera() {
+        mCamera.startBackgroundThread()
+        val cameraManager = mCamera.cameraManager(this)
+        val cameraId = mCamera.cameraCharacteristics(cameraManager)
+        mCamera.cameraDevice(cameraManager, cameraId)
+    }
 
-		if (ActivityCompat.checkSelfPermission(this,
-				Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
-			PackageManager.PERMISSION_GRANTED) {
+    private fun closeCamera() {
+        mCamera.stopBackgroundThread()
+        mCamera.closeCamera()
+    }
 
-			fab.isEnabled = false
-				ActivityCompat.requestPermissions(
-				this,
-				arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
-				ODT_PERMISSIONS_REQUEST
-			)
-		}
-	}
 
-	private val options = FirebaseVisionObjectDetectorOptions.Builder()
-		.setDetectorMode(FirebaseVisionObjectDetectorOptions.SINGLE_IMAGE_MODE)
-		.enableMultipleObjects()
-		.enableClassification()
-		.build()
-	private val detector = FirebaseVision.getInstance().getOnDeviceObjectDetector(options)
+    private fun runObjectDetection(bitmap: Bitmap) {
+        // Step 1: create MLKit's VisionImage object
+        val options = FirebaseVisionObjectDetectorOptions.Builder()
+            .setDetectorMode(FirebaseVisionObjectDetectorOptions.SINGLE_IMAGE_MODE)
+            .enableMultipleObjects()  //Add this if you want to detect multiple objects at once
+            .enableClassification()  // Add this if you want to classify the detected objects into categories
+            .build()
 
-	private fun runObjectDetection(bitmap: Bitmap) {
-		// Step 1: create MLKit's VisionImage object
-		val image = FirebaseVisionImage.fromBitmap(bitmap)
+        val detector = FirebaseVision.getInstance().getOnDeviceObjectDetector(options)
 
-		// Step 3: feed given image to detector and setup callback
-		detector.processImage(image)
-			.addOnSuccessListener {
-				// Task completed successfully
-				// Post-detection processing : draw result
-				val drawingView = DrawingView(applicationContext, it)
-				drawingView.draw(Canvas(bitmap))
-				runOnUiThread {
-					imageView.setImageBitmap(bitmap)
-				}
-			}.addOnFailureListener {
-				// Task failed with an exception
-				Toast.makeText(
-					baseContext, "Oops, something went wrong!",
-					Toast.LENGTH_SHORT
-				).show()
-			}
-	}
+        val image = FirebaseVisionImage.fromBitmap(bitmap)
 
-	private fun getCapturedImage(): Bitmap {
-		val srcImage = imageBitmap
+        // Step 3: feed given image to detector and setup callback
+        detector.processImage(image)
+            .addOnSuccessListener {
+                Log.e("it", it.toString())
+                val drawingView = DrawingView(applicationContext, it)
+                drawingView.draw(Canvas(bitmap))
+                runOnUiThread {
+                    imageView.setImageBitmap(bitmap)
+                }
+            }.addOnFailureListener {
+                // Task failed with an exception
+                Toast.makeText(
+                    baseContext, "Oops, something went wrong!",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+    }
 
-		// crop image to match imageView's aspect ratio
-		val scaleFactor = Math.min(
-			srcImage.width / imageView.width.toFloat(),
-			srcImage.height / imageView.height.toFloat()
-		)
+//    Permissions
+    private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
+        ContextCompat.checkSelfPermission(
+            baseContext, it) == PackageManager.PERMISSION_GRANTED
+    }
 
-		val deltaWidth = (srcImage.width - imageView.width * scaleFactor).toInt()
-		val deltaHeight = (srcImage.height - imageView.height * scaleFactor).toInt()
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        if (requestCode == REQUEST_CODE_PERMISSIONS) {
+            if (allPermissionsGranted()) {
+                openCamera()
+            } else {
+                Toast.makeText(this,
+                    "Permissions not granted by the user.",
+                    Toast.LENGTH_SHORT).show()
+                finish()
+            }
+        }
+    }
 
-		val scaledImage = Bitmap.createBitmap(
-			srcImage, deltaWidth / 2, deltaHeight / 2,
-			srcImage.width - deltaWidth, srcImage.height - deltaHeight
-		)
-		srcImage.recycle()
-		return scaledImage
-	}
+    override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture?, i: Int, i1: Int) {
+
+    }
+    override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture?) {
+        onceInTentime {
+            runObjectDetection(textureView.bitmap)
+        }
+    }
+    override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture?): Boolean {
+        return true
+    }
+    override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture?, i: Int, i1: Int) {
+        openCamera()
+    }
+
+    override fun onCameraDeviceOpened(cameraDevice: CameraDevice, cameraSize: Size) {
+        val texture = textureView.surfaceTexture
+        texture.setDefaultBufferSize(cameraSize.width, cameraSize.height)
+        val surface = Surface(texture)
+
+        mCamera.captureSession(cameraDevice, surface)
+        mCamera.captureRequest(cameraDevice, surface)
+    }
+
+    private var count: Int = 0
+    private fun onceInTentime(func: () -> Unit) {
+        if (count++ > 10) {
+            count = 0
+            func()
+        }
+    }
 }
